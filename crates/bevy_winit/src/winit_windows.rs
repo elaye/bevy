@@ -2,7 +2,7 @@ use bevy_math::IVec2;
 use bevy_utils::HashMap;
 use bevy_window::{Window, WindowDescriptor, WindowId, WindowMode};
 use raw_window_handle::HasRawWindowHandle;
-use winit::dpi::LogicalSize;
+use winit::{dpi::LogicalSize, platform::unix::WindowBuilderExtUnix};
 
 #[derive(Debug, Default)]
 pub struct WinitWindows {
@@ -101,6 +101,12 @@ impl WinitWindows {
 
         #[allow(unused_mut)]
         let mut winit_window_builder = winit_window_builder.with_title(&window_descriptor.title);
+
+        let winit_window_builder = if let Some(ref app_id) = window_descriptor.app_id {
+            winit_window_builder.with_app_id(app_id.to_string())
+        } else {
+            winit_window_builder
+        };
 
         #[cfg(target_arch = "wasm32")]
         {

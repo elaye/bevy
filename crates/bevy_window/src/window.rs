@@ -594,6 +594,7 @@ pub struct WindowDescriptor {
     pub resize_constraints: WindowResizeConstraints,
     pub scale_factor_override: Option<f64>,
     pub title: String,
+    pub app_id: Option<String>,
     #[doc(alias = "vsync")]
     pub present_mode: PresentMode,
     pub resizable: bool,
@@ -617,6 +618,7 @@ impl Default for WindowDescriptor {
     fn default() -> Self {
         WindowDescriptor {
             title: "app".to_string(),
+            app_id: None,
             width: 1280.,
             height: 720.,
             position: None,
