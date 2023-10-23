@@ -170,25 +170,28 @@ pub fn ui_focus_system(
     let is_ui_disabled =
         |camera_ui| matches!(camera_ui, Some(&UiCameraConfig { show_ui: false, .. }));
 
-    let cursor_position = camera
-        .iter()
-        .filter(|(_, camera_ui)| !is_ui_disabled(*camera_ui))
-        .filter_map(|(camera, _)| {
-            if let Some(NormalizedRenderTarget::Window(window_ref)) =
-                camera.target.normalize(primary_window)
-            {
-                Some(window_ref)
-            } else {
-                None
-            }
+    let cursor_position = touches_input
+        .first_pressed_position()
+        .or_else(|| {
+            camera
+                .iter()
+                .filter(|(_, camera_ui)| !is_ui_disabled(*camera_ui))
+                .filter_map(|(camera, _)| {
+                    if let Some(NormalizedRenderTarget::Window(window_ref)) =
+                        camera.target.normalize(primary_window)
+                    {
+                        Some(window_ref)
+                    } else {
+                        None
+                    }
+                })
+                .find_map(|window_ref| {
+                    windows
+                        .get(window_ref.entity())
+                        .ok()
+                        .and_then(|window| window.cursor_position())
+                })
         })
-        .find_map(|window_ref| {
-            windows
-                .get(window_ref.entity())
-                .ok()
-                .and_then(|window| window.cursor_position())
-        })
-        .or_else(|| touches_input.first_pressed_position())
         // The cursor position returned by `Window` only takes into account the window scale factor and not `UiScale`.
         // To convert the cursor position to logical UI viewport coordinates we have to divide it by `UiScale`.
         .map(|cursor_position| cursor_position / ui_scale.scale as f32);
