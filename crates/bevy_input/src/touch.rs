@@ -247,6 +247,11 @@ impl Touches {
         self.pressed.get(&id)
     }
 
+    /// Checks if any touch input was pressed.
+    pub fn any_pressed(&self) -> bool {
+        !self.pressed.is_empty()
+    }
+
     /// Checks if any touch input was just pressed.
     pub fn any_just_pressed(&self) -> bool {
         !self.just_pressed.is_empty()
@@ -300,6 +305,11 @@ impl Touches {
     /// Retrieves the position of the first currently pressed touch, if any
     pub fn first_pressed_position(&self) -> Option<Vec2> {
         self.pressed.values().next().map(|t| t.position)
+    }
+
+    /// An iterator visiting the position of every pressed [`Touch`] input in arbitrary order.
+    pub fn iter_pressed_position(&self) -> impl Iterator<Item = Vec2> + '_ {
+        self.pressed.values().map(|t| t.position)
     }
 
     /// Processes a [`TouchInput`] event by updating the `pressed`, `just_pressed`,
