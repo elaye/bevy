@@ -186,30 +186,61 @@ pub fn ui_focus_system(
     let mouse_clicked =
         mouse_button_input.just_pressed(MouseButton::Left) || touches_input.any_just_pressed();
 
-    let camera_cursor_positions: HashMap<Entity, Vec2> = camera_query
-        .iter()
-        .filter_map(|(entity, camera)| {
-            // Interactions are only supported for cameras rendering to a window.
-            let Some(NormalizedRenderTarget::Window(window_ref)) =
-                camera.target.normalize(primary_window)
-            else {
-                return None;
-            };
+    // Prioritize touch events over mouse events
+    let camera_cursor_positions: HashMap<Entity, Vec<Vec2>> = if touches_input.any_pressed() {
+        camera_query
+            .iter()
+            .filter_map(|(entity, camera)| {
+                // Interactions are only supported for cameras rendering to a window.
+                let Some(NormalizedRenderTarget::Window(_)) =
+                    camera.target.normalize(primary_window)
+                else {
+                    return None;
+                };
 
-            let viewport_position = camera
-                .logical_viewport_rect()
-                .map(|rect| rect.min)
-                .unwrap_or_default();
-            windows
-                .get(window_ref.entity())
-                .ok()
-                .and_then(|window| window.cursor_position())
-                .or_else(|| touches_input.first_pressed_position())
-                .map(|cursor_position| (entity, cursor_position - viewport_position))
-        })
+                let positions: Vec<Vec2> = touches_input.iter_pressed_position().collect();
+
+                Some((entity, positions))
+            })
+            .collect()
+    } else {
+        camera_query
+            .iter()
+            .filter_map(|(entity, camera)| {
+                // Interactions are only supported for cameras rendering to a window.
+                let Some(NormalizedRenderTarget::Window(window_ref)) =
+                    camera.target.normalize(primary_window)
+                else {
+                    return None;
+                };
+
+                let viewport_position = camera
+                    .logical_viewport_rect()
+                    .map(|rect| rect.min)
+                    .unwrap_or_default();
+
+                windows
+                    .get(window_ref.entity())
+                    .ok()
+                    .and_then(|window| window.cursor_position())
+                    .or_else(|| touches_input.first_pressed_position())
+                    .map(|cursor_position| (entity, vec![cursor_position - viewport_position]))
+            })
+            .collect()
+    };
+
+    let camera_cursor_positions: HashMap<Entity, Vec<Vec2>> = camera_cursor_positions
+        .into_iter()
         // The cursor position returned by `Window` only takes into account the window scale factor and not `UiScale`.
         // To convert the cursor position to logical UI viewport coordinates we have to divide it by `UiScale`.
-        .map(|(entity, cursor_position)| (entity, cursor_position / ui_scale.0))
+        .map(|(entity, cursor_positions)| {
+            let cursor_positions = cursor_positions
+                .into_iter()
+                .map(|cursor_position| cursor_position / ui_scale.0)
+                .collect::<Vec<_>>();
+
+            (entity, cursor_positions)
+        })
         .collect();
 
     // prepare an iterator that contains all the nodes that have the cursor in their rect,
@@ -220,12 +251,15 @@ pub fn ui_focus_system(
         .iter()
         // reverse the iterator to traverse the tree from closest nodes to furthest
         .rev()
-        .filter_map(|entity| {
-            let Ok(node) = node_query.get_mut(*entity) else {
-                return None;
+        .map(|entity| {
+            let Ok(mut node) = node_query.get_mut(*entity) else {
+                return Vec::new();
             };
 
-            let view_visibility = node.view_visibility?;
+            let Some(view_visibility) = node.view_visibility else {
+                return Vec::new();
+            };
+
             // Nodes that are not rendered should not be interactable
             if !view_visibility.get() {
                 // Reset their interaction to None to avoid strange stuck state
@@ -233,12 +267,16 @@ pub fn ui_focus_system(
                     // We cannot simply set the interaction to None, as that will trigger change detection repeatedly
                     interaction.set_if_neq(Interaction::None);
                 }
-                return None;
+
+                return Vec::new();
             }
-            let camera_entity = node
+            let Some(camera_entity) = node
                 .target_camera
                 .map(TargetCamera::entity)
-                .or(default_ui_camera.get())?;
+                .or(default_ui_camera.get())
+            else {
+                return Vec::new();
+            };
 
             let node_rect = node.node.logical_rect(node.global_transform);
 
@@ -251,44 +289,54 @@ pub fn ui_focus_system(
             // The mouse position relative to the node
             // (0., 0.) is the top-left corner, (1., 1.) is the bottom-right corner
             // Coordinates are relative to the entire node, not just the visible region.
-            let relative_cursor_position =
-                camera_cursor_positions
-                    .get(&camera_entity)
-                    .and_then(|cursor_position| {
-                        // ensure node size is non-zero in all dimensions, otherwise relative position will be
-                        // +/-inf. if the node is hidden, the visible rect min/max will also be -inf leading to
-                        // false positives for mouse_over (#12395)
-                        (node_rect.size().cmpgt(Vec2::ZERO).all())
-                            .then_some((*cursor_position - node_rect.min) / node_rect.size())
-                    });
-
-            // If the current cursor position is within the bounds of the node's visible area, consider it for
-            // clicking
-            let relative_cursor_position_component = RelativeCursorPosition {
-                normalized_visible_node_rect: visible_rect.normalize(node_rect),
-                normalized: relative_cursor_position,
+            // let relative_cursor_position =
+            let Some(cursor_positions) = camera_cursor_positions.get(&camera_entity) else {
+                return Vec::new();
             };
 
-            let contains_cursor = relative_cursor_position_component.mouse_over();
+            cursor_positions
+                .iter()
+                .map(|cursor_position| {
+                    // ensure node size is non-zero in all dimensions, otherwise relative position will be
+                    // +/-inf. if the node is hidden, the visible rect min/max will also be -inf leading to
+                    // false positives for mouse_over (#12395)
+                    let relative_cursor_position = (node_rect.size().cmpgt(Vec2::ZERO).all())
+                        .then_some((*cursor_position - node_rect.min) / node_rect.size());
 
-            // Save the relative cursor position to the correct component
-            if let Some(mut node_relative_cursor_position_component) = node.relative_cursor_position
-            {
-                *node_relative_cursor_position_component = relative_cursor_position_component;
-            }
+                    // If the current cursor position is within the bounds of the node's visible area, consider it for
+                    // clicking
+                    let relative_cursor_position_component = RelativeCursorPosition {
+                        normalized_visible_node_rect: visible_rect.normalize(node_rect),
+                        normalized: relative_cursor_position,
+                    };
 
-            if contains_cursor {
-                Some(*entity)
-            } else {
-                if let Some(mut interaction) = node.interaction {
-                    if *interaction == Interaction::Hovered || (relative_cursor_position.is_none())
+                    let contains_cursor = relative_cursor_position_component.mouse_over();
+
+                    // Save the relative cursor position to the correct component
+                    if let Some(ref mut node_relative_cursor_position_component) =
+                        node.relative_cursor_position
                     {
-                        interaction.set_if_neq(Interaction::None);
+                        **node_relative_cursor_position_component =
+                            relative_cursor_position_component;
                     }
-                }
-                None
-            }
+
+                    if contains_cursor {
+                        Some(*entity)
+                    } else {
+                        if let Some(ref mut interaction) = node.interaction {
+                            if **interaction == Interaction::Hovered
+                                || (relative_cursor_position.is_none())
+                            {
+                                interaction.set_if_neq(Interaction::None);
+                            }
+                        }
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
         })
+        .flatten()
+        .filter_map(std::convert::identity)
         .collect::<Vec<Entity>>()
         .into_iter();
 
